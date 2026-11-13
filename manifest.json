@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "オッズ歪みチェッカー",
+  "version": "0.1.0",
+  "description": "開いているオッズページの2連単（裏表合成）と2連複を比較してサイドパネルに表示します（自分用）。",
+  "permissions": ["sidePanel", "storage"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "オッズ歪みチェッカーを開く"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.boatrace.jp/owpc/pc/race/odds2tf*"],
+      "js": ["src/parser.js", "src/calc.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+# Chrome の「ウェブページ、完全」保存で生成される付属フォルダ（HTML本体だけあればよい）
+fixtures/*_files/
+node_modules/
