@@ -164,3 +164,117 @@ test('VENUES: 24場すべて', () => {
   for (let i = 1; i <= 24; i++) assert.ok(VENUES[String(i).padStart(2, '0')]);
   assert.equal(boatPairs().length, 15);
 });
+
+// ---- 3連単・3連複・拡連複のページ ----
+const { parsePage, raceKey, parseRangeText, detectPageType } = require('../src/parser.js');
+const { SECTIONS, absentBoats } = require('../src/calc.js');
+
+const PATHS = { '3t': 'odds3t', '3f': 'odds3f', k: 'oddsk', '2tf': 'odds2tf' };
+const ALL = fs.readdirSync(FIXTURES)
+  .map((f) => /^(odds2tf|odds3t|odds3f|oddsk)_(\d{8})_(\d{2})_(\d{2})_(\w+)\.html$/.exec(f))
+  .filter(Boolean)
+  .map(([file, path, date, jcd, rno, state]) => ({
+    file, path, date, jcd, raceNo: Number(rno), state,
+    type: { odds2tf: '2tf', odds3t: '3t', odds3f: '3f', oddsk: 'k' }[path],
+  }));
+const loadAt = (fx) => parseHTML(
+  fs.readFileSync(path.join(FIXTURES, fx.file), 'utf8'),
+  `https://www.boatrace.jp/owpc/pc/race/${fx.path}?rno=${fx.raceNo}&jcd=${fx.jcd}&hd=${fx.date}`,
+);
+
+test('parseRangeText: 拡連複の「下限-上限」', () => {
+  assert.deepEqual(parseRangeText('2.2-3.0'), [2.2, 3]);
+  assert.deepEqual(parseRangeText(' 1.1 - 1.1 '), [1.1, 1.1]);
+  assert.deepEqual(parseRangeText('105.3-1244'), [105.3, 1244]);
+  for (const t of ['欠場', '-', '2.2', '3.0-2.2', '0.0-1.0', '', null]) assert.equal(parseRangeText(t), null, String(t));
+});
+
+const EXPECTED_COUNTS = {
+  '3t': { full: 120, kekkajo: 60, key: 't' },
+  '3f': { full: 20, kekkajo: 10, key: 'f' },
+  k: { full: 15, kekkajo: 10, key: 'k' },
+};
+
+for (const fx of ALL.filter((f) => f.type !== '2tf')) {
+  test(`3連単・3連複・拡連複: ${fx.file}`, () => {
+    const page = parsePage(loadAt(fx));
+    assert.equal(page.type, fx.type);
+    const exp = EXPECTED_COUNTS[fx.type];
+    const odds = page.odds[exp.key];
+    if (fx.state === 'nodata') {
+      assert.deepEqual(odds, {});
+      assert.equal(page.meta.notice, 'データがありません。');
+      return;
+    }
+    assert.equal(raceKey(page.meta), `${fx.date}_${fx.jcd}_${fx.raceNo}`);
+    assert.equal(Object.keys(odds).length, fx.state === 'kekkajo' ? exp.kekkajo : exp.full);
+    assert.deepEqual(page.absent, fx.state === 'kekkajo' ? [6] : []);
+    for (const [key, v] of Object.entries(odds)) {
+      if (fx.type === '3t') assert.match(key, /^([1-6])-(?!\1)([1-6])-(?!\1|\2)[1-6]$/);
+      else if (fx.type === '3f') {
+        const b = key.split('=').map(Number);
+        assert.ok(b.length === 3 && b[0] < b[1] && b[1] < b[2], key);
+      } else {
+        const b = key.split('=').map(Number);
+        assert.ok(b.length === 2 && b[0] < b[1], key);
+      }
+      if (fx.type === 'k') assert.ok(Array.isArray(v) && v[0] >= 1 && v[0] <= v[1], `${key}=${v}`);
+      else assert.ok(typeof v === 'number' && v >= 1, `${key}=${v}`);
+    }
+  });
+}
+
+test('3連単（大村12R 発売中）: 列=1着、rowspan の艇=2着、行の艇=3着', () => {
+  const page = parsePage(load('odds3t_20261114_24_12_live.html'));
+  assert.equal(page.type, '3t');
+  assert.equal(page.odds.t['1-2-3'], 12.1);
+  assert.equal(page.odds.t['1-2-4'], 27.5);
+  assert.equal(page.odds.t['2-1-3'], 79);
+  assert.equal(page.odds.t['3-1-2'], 58.9);
+  assert.equal(page.meta.updatedAt, '19:41');
+});
+
+test('3連複・拡連複（大村12R 発売中）: 値', () => {
+  const f = parsePage(load('odds3f_20261114_24_12_live.html'));
+  assert.equal(f.odds.f['1=2=3'], 5.9);
+  assert.equal(f.odds.f['1=2=4'], 15.7);
+  const k = parsePage(load('oddsk_20261114_24_12_live.html'));
+  assert.deepEqual(k.odds.k['1=2'], [2.2, 3]);
+  assert.deepEqual(k.odds.k['1=3'], [1.1, 1.1]);
+  assert.deepEqual(k.odds.k['2=3'], [4.3, 6.9]);
+});
+
+test('ページの種類はタブから判定（URL が無くても）', () => {
+  assert.equal(detectPageType(load('odds2tf_20261114_24_09_live.html')), '2tf');
+  assert.equal(detectPageType(load('odds3t_20261114_24_12_live.html')), '3t');
+  assert.equal(detectPageType(load('odds3f_20261114_24_12_live.html')), '3f');
+  assert.equal(detectPageType(load('oddsk_20261114_24_12_live.html')), 'k');
+});
+
+test('同じレースの4ページから4つの比較がすべて計算できる（大村12R・江戸川12R 欠場）', () => {
+  for (const [race, state] of [['20261114_24_12', 'live'], ['20261114_03_12', 'kekkajo']]) {
+    const pages = {};
+    for (const fx of ALL.filter((f) => `${f.date}_${f.jcd}_${String(f.raceNo).padStart(2, '0')}` === race && f.state === state)) {
+      pages[fx.type] = { ok: true, ...parsePage(loadAt(fx)) };
+    }
+    assert.deepEqual(Object.keys(pages).sort(), ['2tf', '3f', '3t', 'k']);
+    const absent = absentBoats(pages);
+    for (const s of SECTIONS) {
+      const rows = s.compute(pages, absent);
+      const computable = rows.filter((r) => r.r !== null || r.rRange);
+      assert.ok(computable.length > 0, `${race} ${s.id}`);
+      if (state === 'live') assert.equal(computable.length, rows.length, `${race} ${s.id}`);
+      else assert.ok(rows.filter((r) => r.absent).every((r) => r.boats.includes(6)));
+    }
+  }
+});
+
+test('3連単6点 vs 3連複（大村12R）: 1=2=3 の合成を手計算と照合', () => {
+  const t = parsePage(load('odds3t_20261114_24_12_live.html')).odds.t;
+  const f = parsePage(load('odds3f_20261114_24_12_live.html')).odds.f;
+  const legs = ['1-2-3', '1-3-2', '2-1-3', '2-3-1', '3-1-2', '3-2-1'].map((k) => t[k]);
+  const s = 1 / legs.reduce((acc, o) => acc + 1 / o, 0);
+  const row = SECTIONS[1].compute({ '3t': { odds: { t } }, '3f': { odds: { f } } }, []).find((r) => r.key === '1=2=3');
+  assert.ok(Math.abs(row.s - s) < 1e-9);
+  assert.ok(Math.abs(row.r - f['1=2=3'] / s) < 1e-9);
+});
