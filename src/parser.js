@@ -1,18 +1,31 @@
 /*
- * parser.js — 2連単・2連複オッズページ（/owpc/pc/race/odds2tf）の Document からオッズを取り出す純粋関数
+ * parser.js — オッズページの Document からオッズを取り出す純粋関数
  *
- *   parseOdds(doc)     → { a: {"1-2": 5.3, ...}, c: {"1=2": 3.1, ...} }
+ * 対象ページ（/owpc/pc/race/<種類>?rno=&jcd=&hd=）:
+ *   odds2tf 2連単・2連複 / odds3t 3連単 / odds3f 3連複 / oddsk 拡連複
+ *
+ *   parsePage(doc)     → { type: '2tf'|'3t'|'3f'|'k'|null, meta, odds, absent }
+ *     odds（type ごと）:
+ *       2tf: { a: {"1-2": 5.3, ...}, c: {"1=2": 3.1, ...} }
+ *       3t : { t: {"1-2-3": 12.1, ...} }
+ *       3f : { f: {"1=2=3": 5.9, ...} }（艇番は昇順）
+ *       k  : { k: {"1=2": [2.2, 3.0], ...} }（拡連複は [下限, 上限]）
+ *     absent: 欠場艇の艇番（その艇を含むセルがすべて「欠場」のもの）
+ *   parseOdds(doc)     → 2連単・2連複だけを読む（{ a, c }）
  *   parseRaceMeta(doc) → { venue, jcd, raceNo, date, updatedAt, oddsLabel, deadline, raceTitle, notice }
  *
  * 数値でない値（欠場・発売票数0の「0.0」・「-」・空欄など）はキーごと出力しない（エラーにしない）。
  *
- * ページ構造（fixtures/ の 14 場分の保存 HTML で確認。場による違いはない）:
+ * ページ構造（fixtures/ の保存 HTML で確認。場による違いはない）:
  *   <div class="title7"><h3><span class="title7_mainLabel">2連単オッズ</span></h3></div>
  *   <div class="table1"><table>
  *     <thead> 1列目の艇番 th が 1〜6 の順に並ぶ（艇番 th と選手名 th が交互）
- *     <tbody> 各行は「相手艇番 td + td.oddsPoint」の組が 6 列分。列 k が 1着（2連複は小さい番号側）
- *   2連複も同じ形で、下三角以外は td.is-disabled
- *   欠場は td.oddsPoint.is-miss に「欠場」。1000倍以上は「1244」のように小数点なし。
+ *   2連単・2連複・拡連複（2艇の表）:
+ *     <tbody> 各行は「相手艇番 td + td.oddsPoint」の組が 6 列分。列 k が 1着（連複系は組の一方）
+ *   3連単・3連複（3艇の表）:
+ *     2着艇の td が rowspan=4 で4行をまとめる。ブロック先頭行は列ごとに「2着 td + 3着 td + td.oddsPoint」の3セル、
+ *     残りの行は「3着 td + td.oddsPoint」の2セル。3連複は下三角以外が td.is-disabled
+ *   欠場は td.oddsPoint.is-miss に「欠場」。1000倍以上は「1244」のように小数点なし。拡連複は「2.2-3.0」。
  *
  * 使う DOM API は getElementsByClassName / getElementsByTagName / children / parentElement /
  * nextElementSibling / textContent / getAttribute / classList.contains のみ
@@ -21,8 +34,17 @@
 (function (root) {
   'use strict';
 
-  const LABEL_EXACTA = '2連単オッズ';
-  const LABEL_QUINELLA = '2連複オッズ';
+  const LABELS = {
+    exacta: '2連単オッズ',
+    quinella: '2連複オッズ',
+    trifecta: '3連単オッズ',
+    trio: '3連複オッズ',
+    wide: '拡連複オッズ',
+  };
+
+  // オッズ種別タブ（li.is-active）の表示 / URL のパス名 → ページの種類
+  const TAB_TYPES = { '2連単・2連複': '2tf', '3連単': '3t', '3連複': '3f', '拡連複': 'k' };
+  const PATH_TYPES = { odds2tf: '2tf', odds3t: '3t', odds3f: '3f', oddsk: 'k' };
 
   // jcd → レース場名（ページから場名が取れなかったときの予備）
   const VENUES = {
@@ -76,51 +98,164 @@
     return null;
   }
 
-  /**
-   * オッズ表を走査して [1列目の艇, 相手艇, オッズ] を返す（数値でないセルは除外）。
-   * 列と艇番の対応は thead の艇番 th から読む（1〜6 が並んでいる前提をハードコードしない）。
-   */
-  function readGrid(table) {
+  /** "2.2-3.0" → [2.2, 3.0]（拡連複）。読めなければ null */
+  function parseRangeText(text) {
+    if (typeof text !== 'string') return null;
+    const m = /^([^-]+)-([^-]+)$/.exec(text.replace(/[\s\u00a0\u3000]/g, ''));
+    if (!m) return null;
+    const lo = parseOddsText(m[1]);
+    const hi = parseOddsText(m[2]);
+    return lo !== null && hi !== null && lo <= hi ? [lo, hi] : null;
+  }
+
+  function headerBoats(table) {
     const thead = first(table.getElementsByTagName('thead'));
-    const columns = thead
+    return thead
       ? Array.from(thead.getElementsByTagName('th')).map((th) => parseBoat(th.textContent)).filter((b) => b !== null)
       : [];
-    const out = [];
-    if (columns.length === 0) return out;
+  }
 
-    for (const tbody of Array.from(table.getElementsByTagName('tbody'))) {
-      for (const tr of Array.from(tbody.getElementsByTagName('tr'))) {
-        const cells = Array.from(tr.children);
-        for (let k = 0; k < columns.length; k++) {
-          const boatCell = cells[2 * k];
-          const oddsCell = cells[2 * k + 1];
-          if (!boatCell || !hasClass(oddsCell, 'oddsPoint') || hasClass(oddsCell, 'is-miss')) continue;
-          const other = parseBoat(boatCell.textContent);
-          const odds = parseOddsText(oddsCell.textContent);
-          if (other === null || other === columns[k] || odds === null) continue;
-          out.push([columns[k], other, odds]);
-        }
+  const bodyRows = (table) =>
+    Array.from(table.getElementsByTagName('tbody')).flatMap((tb) => Array.from(tb.getElementsByTagName('tr')));
+
+  /**
+   * 2艇の表（2連単・2連複・拡連複）を走査し、オッズのセルごとに visit({ boats: [列の艇, 相手艇], cell }) を呼ぶ。
+   * 列と艇番の対応は thead の艇番 th から読む（1〜6 が並んでいる前提をハードコードしない）。
+   */
+  function walkPairGrid(table, visit) {
+    const columns = headerBoats(table);
+    for (const tr of bodyRows(table)) {
+      const cells = Array.from(tr.children);
+      for (let k = 0; k < columns.length; k++) {
+        const boatCell = cells[2 * k];
+        const oddsCell = cells[2 * k + 1];
+        if (!boatCell || !hasClass(oddsCell, 'oddsPoint')) continue;
+        const other = parseBoat(boatCell.textContent);
+        if (other === null || other === columns[k]) continue;
+        visit({ boats: [columns[k], other], cell: oddsCell });
       }
     }
-    return out;
   }
 
   /**
-   * Document → { a: {"i-j": オッズ}, c: {"i=j": オッズ（i<j）} }
+   * 3艇の表（3連単・3連複）を走査する。rowspan=4 の2着艇 td があるブロック先頭行は1列3セル、
+   * それ以外の行は1列2セル。列ごとに直前のブロックの2着艇を覚えておく。
+   */
+  function walkTripleGrid(table, visit) {
+    const columns = headerBoats(table);
+    const n = columns.length;
+    const second = new Array(n).fill(null);
+    for (const tr of bodyRows(table)) {
+      const cells = Array.from(tr.children);
+      let width;
+      if (cells.length === 3 * n) width = 3;
+      else if (cells.length === 2 * n) width = 2;
+      else continue;
+      for (let k = 0; k < n; k++) {
+        const base = width * k;
+        if (width === 3) second[k] = parseBoat(cells[base].textContent);
+        const thirdCell = cells[base + width - 2];
+        const oddsCell = cells[base + width - 1];
+        if (second[k] === null || !hasClass(oddsCell, 'oddsPoint')) continue;
+        const third = parseBoat(thirdCell.textContent);
+        const boats = [columns[k], second[k], third];
+        if (third === null || new Set(boats).size !== 3) continue;
+        visit({ boats, cell: oddsCell });
+      }
+    }
+  }
+
+  /** 欠場セルの集計から、欠場艇（その艇を含むセルがすべて is-miss）を求める */
+  function absentTracker() {
+    const total = {};
+    const miss = {};
+    return {
+      add(boats, isMiss) {
+        for (const b of boats) {
+          total[b] = (total[b] || 0) + 1;
+          if (isMiss) miss[b] = (miss[b] || 0) + 1;
+        }
+      },
+      result: () => Object.keys(total).map(Number).filter((b) => miss[b] === total[b]).sort((x, y) => x - y),
+    };
+  }
+
+  /**
+   * 表を読んで { key: 値 } にする。
+   * keyOf(boats) でキーを作り、valueOf(text) で値を読む（null なら除外）。
+   */
+  function readTable(table, walk, keyOf, valueOf, absent) {
+    const out = {};
+    if (!table) return out;
+    walk(table, ({ boats, cell }) => {
+      const isMiss = hasClass(cell, 'is-miss');
+      absent.add(boats, isMiss);
+      if (isMiss) return;
+      const v = valueOf(cell.textContent);
+      if (v !== null) out[keyOf(boats)] = v;
+    });
+    return out;
+  }
+
+  const ordered = (boats) => boats.join('-');
+  const unordered = (boats) => [...boats].sort((x, y) => x - y).join('=');
+
+  function parseOddsWithAbsent(doc, type) {
+    const absent = absentTracker();
+    let odds;
+    switch (type) {
+      case '2tf':
+        odds = {
+          a: readTable(findOddsTable(doc, LABELS.exacta), walkPairGrid, ordered, parseOddsText, absent),
+          c: readTable(findOddsTable(doc, LABELS.quinella), walkPairGrid, unordered, parseOddsText, absent),
+        };
+        break;
+      case '3t':
+        odds = { t: readTable(findOddsTable(doc, LABELS.trifecta), walkTripleGrid, ordered, parseOddsText, absent) };
+        break;
+      case '3f':
+        odds = { f: readTable(findOddsTable(doc, LABELS.trio), walkTripleGrid, unordered, parseOddsText, absent) };
+        break;
+      case 'k':
+        odds = { k: readTable(findOddsTable(doc, LABELS.wide), walkPairGrid, unordered, parseRangeText, absent) };
+        break;
+      default:
+        odds = {};
+    }
+    return { odds, absent: absent.result() };
+  }
+
+  /**
+   * Document → { a: {"i-j": オッズ}, c: {"i=j": オッズ（i<j）} }（2連単・2連複のページ用）
    * 表が見つからない（発売前・データなしなど）場合は空のオブジェクトを返す。
    */
   function parseOdds(doc) {
-    const a = {};
-    const c = {};
-    const exacta = findOddsTable(doc, LABEL_EXACTA);
-    if (exacta) {
-      for (const [x, y, v] of readGrid(exacta)) a[`${x}-${y}`] = v;
+    return parseOddsWithAbsent(doc, '2tf').odds;
+  }
+
+  /** ページの種類を判定する（オッズ種別タブの選択中の項目 → URL のパス名の順） */
+  function detectPageType(doc) {
+    for (const tabs of Array.from(doc.getElementsByClassName('tab4_tabs'))) {
+      for (const li of Array.from(tabs.getElementsByTagName('li'))) {
+        if (!hasClass(li, 'is-active')) continue;
+        const t = TAB_TYPES[norm(li.textContent)];
+        if (t) return t;
+      }
     }
-    const quinella = findOddsTable(doc, LABEL_QUINELLA);
-    if (quinella) {
-      for (const [x, y, v] of readGrid(quinella)) c[`${Math.min(x, y)}=${Math.max(x, y)}`] = v;
-    }
-    return { a, c };
+    const m = /\/race\/([a-z0-9]+)\?/i.exec(doc.URL || (doc.location && doc.location.href) || '');
+    return (m && PATH_TYPES[m[1]]) || null;
+  }
+
+  /** ページの種類・レース情報・オッズ・欠場艇をまとめて読む */
+  function parsePage(doc) {
+    const type = detectPageType(doc);
+    const { odds, absent } = parseOddsWithAbsent(doc, type);
+    return { type, meta: parseRaceMeta(doc), odds, absent };
+  }
+
+  /** レースを一意に表すキー（日付_場_レース番号）。読めなければ null */
+  function raceKey(meta) {
+    return meta && meta.date && meta.jcd && meta.raceNo != null ? `${meta.date}_${meta.jcd}_${meta.raceNo}` : null;
   }
 
   /** URL / href からレースのパラメータ（rno, jcd, hd）を読む */
@@ -216,7 +351,9 @@
     };
   }
 
-  const api = { VENUES, parseOddsText, parseOdds, parseRaceMeta };
+  const api = {
+    VENUES, PATH_TYPES, parseOddsText, parseRangeText, parseOdds, parseRaceMeta, detectPageType, parsePage, raceKey,
+  };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.OddsParser = api;

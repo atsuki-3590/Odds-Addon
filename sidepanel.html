@@ -15,29 +15,21 @@
   <p id="status" class="status">オッズページを開いてください。</p>
 
   <details class="settings">
-    <summary>強調しきい値</summary>
+    <summary>表示の設定</summary>
     <form id="thresholds">
-      <label>2連複が得: R ≥ <input id="th-high" type="number" step="0.01" min="1.01" required></label>
-      <label>2連単2点が得: R ≤ <input id="th-low" type="number" step="0.01" max="0.99" min="0.01" required></label>
+      <label>1点買いが得: R ≥ <input id="th-high" type="number" step="0.01" min="1.01" required></label>
+      <label>複数点買いが得: R ≤ <input id="th-low" type="number" step="0.01" max="0.99" min="0.01" required></label>
       <button type="button" id="th-reset">初期値に戻す</button>
+      <label class="check"><input id="only-strong" type="checkbox"> しきい値を超えた組だけ表示</label>
     </form>
-    <p class="note">オッズは0.1刻みで丸められているため、R が 0.95〜1.05 程度の差はノイズとみなしてください。</p>
+    <p class="note">
+      R = 1点買いのオッズ ÷ 複数点の合成オッズ。R &gt; 1 なら1点買い（2連複・3連複・2連単・拡連複）、R &lt; 1 なら複数点買いが得。
+      オッズは0.1刻みで丸められているため、R が 0.95〜1.05 程度の差はノイズとみなしてください。
+      拡連複は配当が幅で示されるので R も幅で表示し、幅全体がしきい値を超えたときだけ強調します。
+    </p>
   </details>
 
-  <table id="table" hidden>
-    <thead>
-      <tr>
-        <th>組</th>
-        <th title="2連単 i→j">a</th>
-        <th title="2連単 j→i">b</th>
-        <th title="合成オッズ 1/(1/a+1/b)">合成S</th>
-        <th title="2連複 i=j">2連複C</th>
-        <th title="C / S">R</th>
-        <th>得な買い方</th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
+  <div id="sections"></div>
 
   <script src="src/calc.js"></script>
   <script src="src/view.js"></script>

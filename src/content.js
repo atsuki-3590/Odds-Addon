@@ -1,6 +1,7 @@
 /*
  * content.js — 開いているオッズページの DOM を読み、結果をバックグラウンド経由でサイドパネルへ渡す
  *
+ * 対象: 2連単・2連複 / 3連単 / 3連複 / 拡連複 のオッズページ（manifest.json の matches）
  * - 読むのはこのページの DOM だけ。fetch や定期取得はしない
  * - ページの DOM は一切書き換えない
  * - 「オッズ更新」などで表が変わったら MutationObserver で検知して再解析する
@@ -8,7 +9,7 @@
 (function () {
   'use strict';
 
-  const { parseOdds, parseRaceMeta } = globalThis.OddsParser;
+  const { parsePage } = globalThis.OddsParser;
   const DEBOUNCE_MS = 300;
 
   let lastSignature = null;
@@ -16,12 +17,7 @@
 
   function buildPayload() {
     try {
-      return {
-        ok: true,
-        url: location.href,
-        meta: parseRaceMeta(document),
-        odds: parseOdds(document),
-      };
+      return { ok: true, url: location.href, ...parsePage(document) };
     } catch (e) {
       return { ok: false, url: location.href, error: String((e && e.message) || e) };
     }
