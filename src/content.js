@@ -47,9 +47,11 @@
     timer = setTimeout(run, DEBOUNCE_MS);
   }
 
-  // TODO: fixtures を見てオッズ表のコンテナに絞る（現状は body 全体を監視）
+  // 「更新」ボタンは現状ページ全体の再読み込み（その場合はこのスクリプトが再実行される）。
+  // 将来ページ内で表だけ差し替わる作りになっても追従できるよう、メイン領域を監視しておく。
+  const target = document.querySelector('main.l-main') || document.body;
   const observer = new MutationObserver(schedule);
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  observer.observe(target, { childList: true, subtree: true, characterData: true });
 
   run();
 })();

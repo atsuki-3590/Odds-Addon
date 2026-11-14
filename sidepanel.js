@@ -53,11 +53,17 @@
     const meta = p.meta || {};
     const venue = meta.venue || '';
     const raceNo = meta.raceNo != null ? `${meta.raceNo}R` : '';
-    els.race.textContent = [venue, raceNo].filter(Boolean).join(' ') || '—';
+    const title = [venue, raceNo].filter(Boolean).join(' ');
+    els.race.textContent = title ? (meta.raceTitle ? `${title}　${meta.raceTitle}` : title) : '—';
     const parts = [];
-    if (meta.updatedAt) parts.push(`オッズ時刻: ${meta.updatedAt}`);
-    if (p.parsedAt) parts.push(`解析: ${new Date(p.parsedAt).toLocaleTimeString('ja-JP')}`);
-    els.times.textContent = parts.join(' / ');
+    if (meta.date && /^\d{8}$/.test(meta.date)) {
+      parts.push(`${Number(meta.date.slice(4, 6))}/${Number(meta.date.slice(6, 8))}`);
+    }
+    if (meta.deadline) parts.push(`締切予定 ${meta.deadline}`);
+    if (meta.updatedAt) parts.push(`オッズ更新 ${meta.updatedAt}`);
+    else if (meta.oddsLabel) parts.push(meta.oddsLabel);
+    if (p.parsedAt) parts.push(`読取 ${new Date(p.parsedAt).toLocaleTimeString('ja-JP')}`);
+    els.times.textContent = parts.join(' · ');
 
     if (!p.ok) {
       els.table.hidden = true;
@@ -67,11 +73,19 @@
 
     const rows = computeRows(p.odds);
     const computable = rows.filter((r) => r.r !== null).length;
-    setStatus(computable === 0 ? '計算できる組がありません（発売前・欠場など）。' : '', false);
+    if (computable === 0) {
+      els.table.hidden = true;
+      setStatus(meta.notice || '計算できる組がありません（発売前・データなしなど）。', false);
+      return;
+    }
+    const skipped = rows.length - computable;
+    setStatus(skipped > 0 ? `${skipped}組は欠場・発売票数0などで計算対象外です。` : '', false);
 
     const frag = document.createDocumentFragment();
     for (const row of rows) {
-      const { better, strong } = classify(row.r, thresholds);
+      // 表示している小数3桁の値で判定する（「0.900」と表示されているのに強調されない、を防ぐ）
+      const shownR = row.r === null ? null : Math.round(row.r * 1000) / 1000;
+      const { better, strong } = classify(shownR, thresholds);
       const tr = document.createElement('tr');
       if (better === null) tr.className = 'na';
       else tr.className = `${better} ${strong ? 'strong' : 'weak'}`;
