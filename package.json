@@ -4,6 +4,7 @@
   "private": true,
   "description": "2連単(裏表合成) vs 2連複 のオッズ比較 Chrome 拡張（自分用）",
   "scripts": {
+    "build": "node scripts/build-bookmarklet.js",
     "test": "node --test \"test/**/*.test.js\""
   }
 }
