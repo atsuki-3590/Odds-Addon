@@ -1,8 +1,8 @@
 {
   "name": "odds-distortion-checker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "2連単(裏表合成) vs 2連複 のオッズ比較 Chrome 拡張（自分用）",
+  "description": "同じ的中条件になる買い方の合成オッズ（2連単2点と2連複、3連単と3連複など）を比べる Chrome 拡張と Android 用ブックマークレット（自分用）",
   "scripts": {
     "build": "node scripts/build-bookmarklet.js",
     "test": "node --test \"test/**/*.test.js\""

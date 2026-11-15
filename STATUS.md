@@ -1,6 +1,6 @@
 # STATUS
 
-最終更新：2026-11-14
+最終更新：2026-11-15
 
 ## 目的と完了基準
 
@@ -24,7 +24,7 @@
 
 - PC の Chrome（拡張）と Android の Chrome（ブックマークレット）で、発売中のレースを使って実機確認する
 - fixtures にない場の 3連単・3連複・拡連複のページを集めて追加し、パーサーの回帰テストを広げる
-- `package.json` の `description`（「2連単(裏表合成) vs 2連複」のまま）と `version`（0.1.0、manifest.json は 0.2.0）を現状に合わせる
+- `package.json` の `description`（「2連単(裏表合成) vs 2連複」のまま）と `version`（0.1.0、manifest.json は 0.2.0）を現状に合わせる（2026-11-15 済：version を 0.2.0 に、description を manifest.json に合わせた）
 
 ## 決定事項
 
